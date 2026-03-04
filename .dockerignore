@@ -1,0 +1,9 @@
+myenv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+fly.toml
+Dockerfile
+.dockerignore
