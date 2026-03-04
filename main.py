@@ -1,68 +1,106 @@
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional
+from starlette.concurrency import run_in_threadpool
 import yt_dlp
+import functools
 
-app = FastAPI()
+app = FastAPI(title="Raion Player API", version="1.1.0")
 
 YDL_OPTS = {
     "quiet": True,
     "skip_download": True,
+    "js_runtimes": {"node": {}},
+    "remote_components": ["ejs:github"],
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android"],
+        }
+    }
 }
+
+# --- Models ---
+
+class SearchResult(BaseModel):
+    id: str
+    title: str
+    thumbnail: str
+    duration: int
+
+class SearchResponse(BaseModel):
+    results: List[SearchResult]
+
+class AudioResponse(BaseModel):
+    url: str
+    bitrate: Optional[float]
+    ext: str
+
+# --- Helpers ---
+
+def sync_extract_info(url: str, ydl_opts: dict):
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        return ydl.extract_info(url, download=False)
+
+@functools.lru_cache(maxsize=128)
+def sync_search(query: str):
+    """Synchronous search function to be cached."""
+    with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
+        return ydl.extract_info(f"ytsearch10:{query}", download=False)
+
+# --- Endpoints ---
 
 @app.get("/")
 async def root():
-    return {"status": "Algeria Music Backend Running"}
+    return {"status": "Algeria Music Backend Running", "version": "1.1.0"}
 
-# Search YouTube
-@app.get("/search")
+@app.get("/search", response_model=SearchResponse)
 async def search(q: str):
     try:
-        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            info = ydl.extract_info(f"ytsearch10:{q}", download=False)
+        # caching works on the sync function, we run it in a threadpool to avoid blocking
+        info = await run_in_threadpool(sync_search, q)
 
-            results = []
-            for entry in info["entries"]:
-                results.append({
-                    "id": entry["id"],
-                    "title": entry["title"],
-                    "thumbnail": entry["thumbnail"],
-                    "duration": entry["duration"],
-                })
+        results = [
+            SearchResult(
+                id=entry["id"],
+                title=entry["title"],
+                thumbnail=entry["thumbnail"],
+                duration=entry["duration"]
+            )
+            for entry in info.get("entries", [])
+        ]
 
-            return {"results": results}
+        return SearchResponse(results=results)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# Get Best Audio Stream
-@app.get("/audio/{video_id}")
+@app.get("/audio/{video_id}", response_model=AudioResponse)
 async def get_audio(video_id: str):
     try:
-        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            info = ydl.extract_info(
-                f"https://www.youtube.com/watch?v={video_id}",
-                download=False
-            )
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        info = await run_in_threadpool(sync_extract_info, url, YDL_OPTS)
 
-            formats = info.get("formats", [])
-            audio_formats = [
-                f for f in formats if f.get("acodec") != "none"
-            ]
+        formats = info.get("formats", [])
+        # Prefer m4a audio if possible, then any audio
+        audio_formats = [f for f in formats if f.get("acodec") != "none"]
 
-            if not audio_formats:
-                raise Exception("No audio format found")
+        if not audio_formats:
+            raise HTTPException(status_code=404, detail="No audio format found")
 
-            best_audio = sorted(
-                audio_formats,
-                key=lambda x: x.get("abr", 0),
-                reverse=True
-            )[0]
+        # Sort by bitrate (handle None)
+        best_audio = sorted(
+            audio_formats,
+            key=lambda x: (x.get("abr") or 0, x.get("ext") == "m4a"),
+            reverse=True
+        )[0]
 
-            return {
-                "url": best_audio["url"],
-                "bitrate": best_audio.get("abr"),
-                "ext": best_audio.get("ext")
-            }
+        return AudioResponse(
+            url=best_audio["url"],
+            bitrate=best_audio.get("abr"),
+            ext=best_audio.get("ext")
+        )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
