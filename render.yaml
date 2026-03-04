@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: raion-player-api
+    env: docker
+    plan: free
+    region: frankfurt
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 10000
