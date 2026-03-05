@@ -6,6 +6,8 @@ COPY requirements.txt .
 # Install Node.js for yt-dlp
 RUN apt-get update && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements.txt
+# Ensure latest yt-dlp to bypass bot detection
+RUN pip install -U yt_dlp
 
 COPY . .
 

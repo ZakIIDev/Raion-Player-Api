@@ -4,17 +4,22 @@ from typing import List, Optional
 from starlette.concurrency import run_in_threadpool
 import yt_dlp
 import functools
+import os
 
 app = FastAPI(title="Raion Player API", version="1.1.0")
+
+# Check for cookies file
+COOKIES_PATH = "cookies.txt" if os.path.exists("cookies.txt") else None
 
 YDL_OPTS = {
     "quiet": True,
     "skip_download": True,
+    "cookiefile": COOKIES_PATH,
     "js_runtimes": {"node": {}},
     "remote_components": ["ejs:github"],
     "extractor_args": {
         "youtube": {
-            "player_client": ["android"],
+            "player_client": ["android", "web", "ios"],
         }
     }
 }
